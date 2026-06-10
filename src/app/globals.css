@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900;
+}
+
+/* 숫자 입력 셀: 우측 정렬 + 컴팩트 */
+.cell-num {
+  @apply text-right tabular-nums;
+}

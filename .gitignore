@@ -1,0 +1,29 @@
+# dependencies
+node_modules
+
+# next.js
+.next
+out
+
+# portable node toolchain (project-local, never commit)
+/.tools
+
+# env
+.env
+.env.local
+
+# local databases (not used in MVP, but kept per PRD)
+*.db
+*.sqlite
+
+# runtime data store (may contain sensitive figures — never commit)
+/data/estimates.local.json
+/data/raw
+/data/private
+
+# os
+.DS_Store
+Thumbs.db
+
+# misc
+*.log
