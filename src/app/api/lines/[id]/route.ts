@@ -2,19 +2,10 @@ import { NextResponse } from "next/server";
 
 import { isAuthenticated } from "@/lib/auth";
 import { deleteLine, updateLine } from "@/lib/data";
-import { validateNumericFields } from "@/lib/validation";
+import { LINE_NUMERIC_FIELDS, validateNumericFields } from "@/lib/validation";
 import type { EstimateLine } from "@/types/estimate";
 
 type Ctx = { params: Promise<{ id: string }> };
-
-const NUMERIC_FIELDS = [
-  "gmv",
-  "revenue",
-  "cost",
-  "profit",
-  "expectedMarginRate",
-  "actualMarginRate",
-] as const;
 
 export async function PATCH(req: Request, { params }: Ctx) {
   if (!(await isAuthenticated())) {
@@ -23,7 +14,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
   const { id } = await params;
   const body = (await req.json()) as Record<string, unknown>;
 
-  const badField = validateNumericFields(body, NUMERIC_FIELDS);
+  const badField = validateNumericFields(body, LINE_NUMERIC_FIELDS);
   if (badField) {
     return NextResponse.json(
       { error: `${badField} must be a finite number` },
