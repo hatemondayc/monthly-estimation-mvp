@@ -7,6 +7,7 @@ import type { EstimateLine, EstimateVersion } from "@/types/estimate";
 export interface Store {
   versions: EstimateVersion[];
   lines: EstimateLine[];
+  owners: string[];
 }
 
 const NOW = "2026-06-01T00:00:00.000Z";
@@ -86,7 +87,7 @@ export function buildSeed(): Store {
       expectedMarginRate: 20,
       estimateStatus: "진행중",
       basisNote: "광고주 견적 기준",
-      ownerName: "담당자 1",
+      ownerName: "담당자 A",
     }),
     line({
       id: "line-002",
@@ -104,7 +105,7 @@ export function buildSeed(): Store {
       cost: 3500000,
       estimateStatus: "예상",
       basisNote: "전월 유사 캠페인 기준",
-      ownerName: "담당자 2",
+      ownerName: "담당자 B",
     }),
     line({
       id: "line-003",
@@ -125,7 +126,7 @@ export function buildSeed(): Store {
       estimateStatus: "예상",
       basisNote: "중간 Fee 구조, 매체 정산",
       remark: "광고주 회신 대기",
-      ownerName: "담당자 1",
+      ownerName: "담당자 A",
     }),
 
     // ── 업데이트 ──
@@ -145,7 +146,7 @@ export function buildSeed(): Store {
       expectedMarginRate: 22,
       estimateStatus: "진행중",
       basisNote: "진행률 70% 기준, 상향",
-      ownerName: "담당자 1",
+      ownerName: "담당자 A",
     }),
     line({
       id: "line-102",
@@ -163,12 +164,13 @@ export function buildSeed(): Store {
       cost: 3200000,
       estimateStatus: "진행중",
       basisNote: "6월 청구 예정, 소폭 하향",
-      ownerName: "담당자 2",
+      ownerName: "담당자 B",
     }),
   ];
 
   return {
     versions: [firstVersion, updateVersion],
     lines,
+    owners: ["담당자 A", "담당자 B"],
   };
 }

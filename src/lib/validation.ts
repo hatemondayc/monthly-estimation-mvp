@@ -1,5 +1,23 @@
 // 코드 패턴 검증 (사용성 개선용). 저장은 절대 차단하지 않고 warning 메시지만 반환한다.
 // 기존 회사 엑셀의 캠페인번호/JOB번호 표기와 어긋날 때 입력자에게 힌트를 준다.
+// validateNumericFields는 API route에서 공통으로 사용하는 숫자 필드 검증 헬퍼다.
+
+/**
+ * body에서 지정한 필드들이 모두 유한수인지 확인한다.
+ * 유효하지 않은 첫 번째 필드명을 반환하고, 모두 유효하면 null을 반환한다.
+ */
+export function validateNumericFields(
+  body: Record<string, unknown>,
+  fields: readonly string[],
+): string | null {
+  for (const field of fields) {
+    const val = body[field];
+    if (val !== undefined && !Number.isFinite(Number(val))) {
+      return field;
+    }
+  }
+  return null;
+}
 
 const CAMPAIGN_CODE_RE = /^1000-C-\d{2}-\d{4}$/;
 const JOB_CODE_RE = /^1000-C-\d{2}-\d{4}\.\d{2}$/;

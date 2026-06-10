@@ -22,6 +22,7 @@ export interface EstimateRepository {
   deleteVersion(id: string): Promise<boolean>;
 
   listLines(versionId?: string): Promise<EstimateLine[]>;
+  getLine(id: string): Promise<EstimateLine | null>;
   createLine(
     data: Omit<EstimateLine, "id" | "createdAt" | "updatedAt">,
   ): Promise<EstimateLine>;
@@ -30,6 +31,9 @@ export interface EstimateRepository {
     patch: Partial<EstimateLine>,
   ): Promise<EstimateLine | null>;
   deleteLine(id: string): Promise<boolean>;
+
+  listOwners(): Promise<string[]>;
+  addOwner(name: string): Promise<void>;
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -70,6 +74,7 @@ class FileRepository implements EstimateRepository {
       return {
         versions: parsed.versions ?? [],
         lines: parsed.lines ?? [],
+        owners: parsed.owners ?? [],
       };
     } catch (err: unknown) {
       // 파일이 없으면 익명 시드로 초기화한다.
@@ -153,6 +158,11 @@ class FileRepository implements EstimateRepository {
       : store.lines;
   }
 
+  async getLine(id: string): Promise<EstimateLine | null> {
+    const store = await this.read();
+    return store.lines.find((l) => l.id === id) ?? null;
+  }
+
   async createLine(
     data: Omit<EstimateLine, "id" | "createdAt" | "updatedAt">,
   ): Promise<EstimateLine> {
@@ -198,6 +208,24 @@ class FileRepository implements EstimateRepository {
       const removed = store.lines.length !== before;
       if (removed) await this.write(store);
       return removed;
+    });
+  }
+
+  async listOwners(): Promise<string[]> {
+    const store = await this.read();
+    return store.owners;
+  }
+
+  async addOwner(name: string): Promise<void> {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    return this.enqueue(async () => {
+      const store = await this.read();
+      if (!store.owners.includes(trimmed)) {
+        store.owners.push(trimmed);
+        store.owners.sort((a, b) => a.localeCompare(b, "ko"));
+        await this.write(store);
+      }
     });
   }
 }

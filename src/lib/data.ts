@@ -66,32 +66,52 @@ export function getLines(versionId?: string): Promise<EstimateLine[]> {
   return repository.listLines(versionId);
 }
 
-export function createLine(input: NewLineInput): Promise<EstimateLine> {
-  return repository.createLine(applyCalc(input));
+export async function createLine(input: NewLineInput): Promise<EstimateLine> {
+  const line = await repository.createLine(applyCalc(input));
+  // 신규 담당자는 owners 마스터에 등록해 datalist가 즉시 반영되도록 한다.
+  if (input.ownerName.trim()) {
+    await repository.addOwner(input.ownerName);
+  }
+  return line;
 }
 
 export async function updateLine(
   id: string,
   patch: Partial<EstimateLine>,
 ): Promise<EstimateLine | null> {
-  // Fix 7: repository.updateLine이 내부 lock 안에서 read→write를 처리하므로
-  // listLines()로 행을 미리 읽는 이중 읽기를 제거한다.
-  // EstimateTable은 항상 재계산된 전체 행을 전송하므로 patch를 전체 행으로 캐스팅해도 안전하다.
-  return repository.updateLine(id, applyCalc(patch as EstimateLine));
+  // 기존 행을 먼저 읽어 patch와 merge한 뒤 재계산한다.
+  // enqueue 바깥에서 읽어도 repository.updateLine이 enqueue 안에서
+  // 다시 읽어 쓰기 때문에 데이터 안전성에는 영향이 없다.
+  const existing = await repository.getLine(id);
+  if (!existing) return null;
+  const merged = applyCalc({ ...existing, ...patch });
+  const line = await repository.updateLine(id, merged);
+  if (line && patch.ownerName?.trim()) {
+    await repository.addOwner(patch.ownerName);
+  }
+  return line;
 }
 
 export function deleteLine(id: string): Promise<boolean> {
   return repository.deleteLine(id);
 }
 
-/** 전체 행에서 담당자명을 unique 추출 — 담당자 입력 자동완성용. (별도 사용자 테이블 없음) */
+/** owners 마스터 + 행에서 담당자명 unique 목록을 반환한다 — datalist 자동완성용. */
 export async function getOwnerNames(): Promise<string[]> {
-  const lines = await repository.listLines();
-  const names = new Set<string>();
+  const [owners, lines] = await Promise.all([
+    repository.listOwners(),
+    repository.listLines(),
+  ]);
+  const names = new Set<string>(owners);
   for (const l of lines) {
     if (l.ownerName.trim()) names.add(l.ownerName.trim());
   }
   return [...names].sort((a, b) => a.localeCompare(b, "ko"));
+}
+
+/** 담당자 마스터에 이름을 추가한다 (trim·빈값 skip은 repository 내부에서 처리). */
+export function addOwner(name: string): Promise<void> {
+  return repository.addOwner(name);
 }
 
 // ── 요약 / 비교 ────────────────────────────────────────────────────

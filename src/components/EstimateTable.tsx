@@ -4,7 +4,7 @@
 // 즉시 피드백은 로컬 재계산(calculateLine)으로, 영속화는 onBlur/onChange 시 API 호출로.
 // 컬럼 순서는 기존 회사 엑셀 흐름(식별 → 금액 → 상태/메모)에 맞춘다.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { CalculationTypeSelect } from "@/components/CalculationTypeSelect";
 import { calculateLine } from "@/lib/calculations";
@@ -35,7 +35,7 @@ const OWNER_LIST_ID = "owner-options";
 export function EstimateTable({
   versionId,
   initialLines,
-  ownerOptions,
+  ownerOptions: initialOwnerOptions,
 }: {
   versionId: string;
   initialLines: EstimateLine[];
@@ -43,6 +43,12 @@ export function EstimateTable({
 }) {
   const [lines, setLines] = useState<EstimateLine[]>(initialLines);
   const [busy, setBusy] = useState(false);
+  // ownerOptions는 local state로 관리 — 신규 담당자 저장 후 즉시 드롭다운에 반영한다.
+  const [ownerOptions, setOwnerOptions] = useState<string[]>(initialOwnerOptions);
+
+  // useRef로 lines 최신값을 항상 추적 — onBlur stale closure 방지.
+  const linesRef = useRef(lines);
+  linesRef.current = lines;
 
   // patch를 로컬 상태에 반영하고 재계산된 행을 반환한다.
   function patchLocal(id: string, patch: Partial<EstimateLine>): EstimateLine | null {
@@ -58,18 +64,24 @@ export function EstimateTable({
     return result;
   }
 
-  // 재계산된 행을 서버에 직접 전달 — stale closure를 피한다.
+  // 재계산된 행을 서버에 직접 전달하고, 신규 담당자면 ownerOptions에 추가한다.
   async function persistLine(line: EstimateLine) {
-    await fetch(`/api/lines/${line.id}`, {
+    const res = await fetch(`/api/lines/${line.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(line),
     });
+    if (res.ok && line.ownerName.trim()) {
+      const name = line.ownerName.trim();
+      setOwnerOptions((prev) =>
+        prev.includes(name) ? prev : [...prev, name].sort((a, b) => a.localeCompare(b, "ko")),
+      );
+    }
   }
 
-  // 현재 상태의 행을 찾아 persist (텍스트 입력 onBlur 용).
+  // linesRef에서 최신 행을 읽어 persist — onBlur stale closure를 피한다.
   function persistById(id: string) {
-    const cur = lines.find((x) => x.id === id);
+    const cur = linesRef.current.find((x) => x.id === id);
     if (cur) persistLine(cur);
   }
 
@@ -129,7 +141,7 @@ export function EstimateTable({
         </div>
       </div>
 
-      {/* 담당자 자동완성 — 기존 담당자명 unique 목록. 자유 입력도 허용. */}
+      {/* 담당자 자동완성 — owners 마스터 + 기존 행 담당자명. 자유 입력도 허용. */}
       <datalist id={OWNER_LIST_ID}>
         {ownerOptions.map((name) => (
           <option key={name} value={name} />
