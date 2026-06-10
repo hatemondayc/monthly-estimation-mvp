@@ -2,16 +2,36 @@ import { NextResponse } from "next/server";
 
 import { isAuthenticated } from "@/lib/auth";
 import { deleteLine, updateLine } from "@/lib/data";
+import { validateNumericFields } from "@/lib/validation";
 import type { EstimateLine } from "@/types/estimate";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+const NUMERIC_FIELDS = [
+  "gmv",
+  "revenue",
+  "cost",
+  "profit",
+  "expectedMarginRate",
+  "actualMarginRate",
+] as const;
 
 export async function PATCH(req: Request, { params }: Ctx) {
   if (!(await isAuthenticated())) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const { id } = await params;
-  const patch = (await req.json()) as Partial<EstimateLine>;
+  const body = (await req.json()) as Record<string, unknown>;
+
+  const badField = validateNumericFields(body, NUMERIC_FIELDS);
+  if (badField) {
+    return NextResponse.json(
+      { error: `${badField} must be a finite number` },
+      { status: 400 },
+    );
+  }
+
+  const patch = body as Partial<EstimateLine>;
   const line = await updateLine(id, patch);
   if (!line) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json({ line });

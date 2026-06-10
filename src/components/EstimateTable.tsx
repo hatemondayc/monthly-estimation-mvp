@@ -2,17 +2,16 @@
 
 // 핵심 입력 화면 (PRD §11.3). 행 추가/수정/삭제 + 계산 자동화 + gmv/revenue 연동.
 // 즉시 피드백은 로컬 재계산(calculateLine)으로, 영속화는 onBlur/onChange 시 API 호출로.
+// 컬럼 순서는 기존 회사 엑셀 흐름(식별 → 금액 → 상태/메모)에 맞춘다.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { CalculationTypeSelect } from "@/components/CalculationTypeSelect";
 import { calculateLine } from "@/lib/calculations";
+import { emptyLine } from "@/lib/data";
 import { formatPercent, parseNumberInput } from "@/lib/format";
-import {
-  CONFIDENCE_LEVELS,
-  ESTIMATE_STATUSES,
-  SETTLEMENT_TYPES,
-} from "@/types/estimate";
+import { campaignCodeWarning, jobCodeWarning } from "@/lib/validation";
+import { ESTIMATE_STATUSES, SETTLEMENT_TYPES } from "@/types/estimate";
 import type {
   CalculationType,
   EstimateLine,
@@ -32,30 +31,63 @@ function recompute(line: EstimateLine): EstimateLine {
   return { ...line, revenue: r.revenue, cost: r.cost, profit: r.profit, actualMarginRate: r.actualMarginRate };
 }
 
+const OWNER_LIST_ID = "owner-options";
+
 export function EstimateTable({
   versionId,
   initialLines,
+  ownerOptions: initialOwnerOptions,
 }: {
   versionId: string;
   initialLines: EstimateLine[];
+  ownerOptions: string[];
 }) {
   const [lines, setLines] = useState<EstimateLine[]>(initialLines);
   const [busy, setBusy] = useState(false);
+  // ownerOptions는 local state로 관리 — 신규 담당자 저장 후 즉시 드롭다운에 반영한다.
+  const [ownerOptions, setOwnerOptions] = useState<string[]>(initialOwnerOptions);
 
-  function patchLocal(id: string, patch: Partial<EstimateLine>) {
-    setLines((prev) =>
-      prev.map((l) => (l.id === id ? recompute({ ...l, ...patch }) : l)),
-    );
+  // useRef로 lines 최신값을 항상 추적 — onBlur stale closure 방지.
+  const linesRef = useRef(lines);
+  linesRef.current = lines;
+
+  // patch를 로컬 상태에 반영하고 재계산된 행을 반환한다.
+  // setLines updater 안에서 linesRef.current를 동기 갱신해
+  // onChange → onBlur 사이에 re-render가 없어도 최신 값을 읽을 수 있게 한다.
+  function patchLocal(id: string, patch: Partial<EstimateLine>): EstimateLine | null {
+    let result: EstimateLine | null = null;
+    setLines((prev) => {
+      const next = prev.map((l) => {
+        if (l.id !== id) return l;
+        const updated = recompute({ ...l, ...patch });
+        result = updated;
+        return updated;
+      });
+      linesRef.current = next;
+      return next;
+    });
+    return result;
   }
 
-  async function persist(id: string) {
-    const line = lines.find((l) => l.id === id);
-    if (!line) return;
-    await fetch(`/api/lines/${id}`, {
+  // 재계산된 행을 서버에 직접 전달하고, 신규 담당자면 ownerOptions에 추가한다.
+  async function persistLine(line: EstimateLine) {
+    const res = await fetch(`/api/lines/${line.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(line),
     });
+    if (res.ok && line.ownerName.trim()) {
+      const name = line.ownerName.trim();
+      setOwnerOptions((prev) =>
+        prev.includes(name) ? prev : [...prev, name].sort((a, b) => a.localeCompare(b, "ko")),
+      );
+    }
+  }
+
+  // linesRef에서 최신 행을 읽어 persist — onBlur stale closure를 피한다.
+  function persistById(id: string) {
+    const cur = linesRef.current.find((x) => x.id === id);
+    if (cur) persistLine(cur);
   }
 
   async function addRow() {
@@ -63,27 +95,32 @@ export function EstimateTable({
     const res = await fetch("/api/lines", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(emptyPayload(versionId)),
+      body: JSON.stringify(emptyLine(versionId)),
     });
     setBusy(false);
     if (res.ok) {
       const { line } = (await res.json()) as { line: EstimateLine };
       setLines((prev) => [...prev, line]);
+    } else if (res.status === 401) {
+      alert("세션이 만료됐습니다. 페이지를 새로고침해 주세요.");
     }
   }
 
   async function removeRow(id: string) {
     if (!confirm("이 행을 삭제할까요?")) return;
     const res = await fetch(`/api/lines/${id}`, { method: "DELETE" });
-    if (res.ok) setLines((prev) => prev.filter((l) => l.id !== id));
+    if (res.ok) {
+      setLines((prev) => prev.filter((l) => l.id !== id));
+    } else if (res.status === 401) {
+      alert("세션이 만료됐습니다. 페이지를 새로고침해 주세요.");
+    }
   }
 
   function resetRevenue(id: string) {
     const line = lines.find((l) => l.id === id);
     if (!line) return;
-    patchLocal(id, { isRevenueManual: false, revenue: line.gmv });
-    // 상태 반영 후 저장
-    setTimeout(() => persist(id), 0);
+    const next = patchLocal(id, { isRevenueManual: false, revenue: line.gmv });
+    if (next) persistLine(next);
   }
 
   const num = (v: number) => (v === 0 ? "" : String(v));
@@ -109,18 +146,27 @@ export function EstimateTable({
         </div>
       </div>
 
+      {/* 담당자 자동완성 — owners 마스터 + 기존 행 담당자명. 자유 입력도 허용. */}
+      <datalist id={OWNER_LIST_ID}>
+        {ownerOptions.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
+
       <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-        <table className="min-w-[1600px] text-xs">
+        <table className="min-w-[1700px] text-xs">
           <thead className="bg-slate-50 text-slate-500">
             <tr className="[&>th]:whitespace-nowrap [&>th]:px-2 [&>th]:py-2 [&>th]:text-left [&>th]:font-medium">
+              <th>회계기간</th>
               <th>정산</th>
               <th>광고주</th>
               <th>브랜드</th>
-              <th>캠페인</th>
+              <th>캠페인번호</th>
+              <th>캠페인명</th>
               <th>JOB유형</th>
-              <th>JOB코드</th>
+              <th>JOB번호</th>
               <th>JOB명</th>
-              <th>회계기간</th>
+              <th>담당자</th>
               <th>계산방식</th>
               <th className="!text-right">취급고</th>
               <th className="!text-right">매출액</th>
@@ -129,88 +175,95 @@ export function EstimateTable({
               <th className="!text-right">예상%</th>
               <th className="!text-right">실적%</th>
               <th>상태</th>
-              <th>신뢰도</th>
               <th>추정근거</th>
               <th>비고</th>
-              <th>담당자</th>
               <th></th>
             </tr>
           </thead>
           <tbody className="[&_input]:w-full [&_input]:rounded [&_input]:border [&_input]:border-slate-200 [&_input]:px-1.5 [&_input]:py-1 [&_select]:rounded [&_select]:border [&_select]:border-slate-200 [&_select]:px-1 [&_select]:py-1">
-            {lines.map((l) => (
-              <tr key={l.id} className="border-t border-slate-100 align-top [&>td]:px-1.5 [&>td]:py-1">
-                <td className="w-16">
-                  <select
-                    value={l.settlementType}
-                    onChange={(e) => {
-                      patchLocal(l.id, { settlementType: e.target.value as SettlementType });
-                      setTimeout(() => persist(l.id), 0);
-                    }}
-                  >
-                    {SETTLEMENT_TYPES.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                </td>
-                <td className="w-24"><input value={l.advertiserName} onChange={(e) => patchLocal(l.id, { advertiserName: e.target.value })} onBlur={() => persist(l.id)} /></td>
-                <td className="w-24"><input value={l.brandName} onChange={(e) => patchLocal(l.id, { brandName: e.target.value })} onBlur={() => persist(l.id)} /></td>
-                <td className="w-24"><input value={l.campaignName} onChange={(e) => patchLocal(l.id, { campaignName: e.target.value })} onBlur={() => persist(l.id)} /></td>
-                <td className="w-20"><input value={l.jobTypeName} onChange={(e) => patchLocal(l.id, { jobTypeName: e.target.value })} onBlur={() => persist(l.id)} /></td>
-                <td className="w-20"><input value={l.jobCode} onChange={(e) => patchLocal(l.id, { jobCode: e.target.value })} onBlur={() => persist(l.id)} /></td>
-                <td className="w-28"><input value={l.jobName} onChange={(e) => patchLocal(l.id, { jobName: e.target.value })} onBlur={() => persist(l.id)} /></td>
-                <td className="w-20"><input value={l.accountingMonth} placeholder="2026-06" onChange={(e) => patchLocal(l.id, { accountingMonth: e.target.value })} onBlur={() => persist(l.id)} /></td>
-                <td className="w-28">
-                  <CalculationTypeSelect
-                    value={l.calculationType}
-                    onChange={(next: CalculationType) => {
-                      patchLocal(l.id, { calculationType: next });
-                      setTimeout(() => persist(l.id), 0);
-                    }}
-                  />
-                </td>
-                <td className="w-24">
-                  <input className="cell-num" inputMode="numeric" value={num(l.gmv)} onChange={(e) => patchLocal(l.id, { gmv: parseNumberInput(e.target.value) })} onBlur={() => persist(l.id)} />
-                </td>
-                <td className="w-28">
-                  <input className="cell-num" inputMode="numeric" value={num(l.revenue)} onChange={(e) => patchLocal(l.id, { revenue: parseNumberInput(e.target.value), isRevenueManual: true })} onBlur={() => persist(l.id)} />
-                  {l.isRevenueManual && (
-                    <button onClick={() => resetRevenue(l.id)} className="mt-0.5 text-[10px] text-blue-600 hover:underline">
-                      취급고와 동일
-                    </button>
-                  )}
-                </td>
-                <td className="w-24">
-                  <input className="cell-num" inputMode="numeric" disabled={l.calculationType === "profit_rate" || l.calculationType === "manual_profit"} value={num(l.cost)} onChange={(e) => patchLocal(l.id, { cost: parseNumberInput(e.target.value) })} onBlur={() => persist(l.id)} />
-                </td>
-                <td className="w-24">
-                  <input className="cell-num" inputMode="numeric" disabled={l.calculationType !== "manual_profit" && l.calculationType !== "mixed"} value={num(l.profit)} onChange={(e) => patchLocal(l.id, { profit: parseNumberInput(e.target.value) })} onBlur={() => persist(l.id)} />
-                </td>
-                <td className="w-16">
-                  <input className="cell-num" inputMode="numeric" disabled={l.calculationType !== "profit_rate"} value={num(l.expectedMarginRate)} onChange={(e) => patchLocal(l.id, { expectedMarginRate: parseNumberInput(e.target.value) })} onBlur={() => persist(l.id)} />
-                </td>
-                <td className="w-16 cell-num text-slate-500">{formatPercent(l.actualMarginRate)}</td>
-                <td className="w-20">
-                  <select value={l.estimateStatus} onChange={(e) => { patchLocal(l.id, { estimateStatus: e.target.value as EstimateLine["estimateStatus"] }); setTimeout(() => persist(l.id), 0); }}>
-                    {ESTIMATE_STATUSES.map((s) => (<option key={s} value={s}>{s}</option>))}
-                  </select>
-                </td>
-                <td className="w-16">
-                  <select value={l.confidenceLevel} onChange={(e) => { patchLocal(l.id, { confidenceLevel: e.target.value as EstimateLine["confidenceLevel"] }); setTimeout(() => persist(l.id), 0); }}>
-                    {CONFIDENCE_LEVELS.map((c) => (<option key={c} value={c}>{c}</option>))}
-                  </select>
-                </td>
-                <td className="w-32"><input value={l.basisNote} onChange={(e) => patchLocal(l.id, { basisNote: e.target.value })} onBlur={() => persist(l.id)} /></td>
-                <td className="w-32"><input value={l.remark} onChange={(e) => patchLocal(l.id, { remark: e.target.value })} onBlur={() => persist(l.id)} /></td>
-                <td className="w-20"><input value={l.ownerName} onChange={(e) => patchLocal(l.id, { ownerName: e.target.value })} onBlur={() => persist(l.id)} /></td>
-                <td className="w-8">
-                  <button onClick={() => removeRow(l.id)} className="text-slate-400 hover:text-red-600" title="삭제">✕</button>
-                </td>
-              </tr>
-            ))}
+            {lines.map((l) => {
+              const campWarn = campaignCodeWarning(l.campaignCode);
+              const jobWarn = jobCodeWarning(l.jobCode, l.campaignCode);
+              return (
+                <tr key={l.id} className="border-t border-slate-100 align-top [&>td]:px-1.5 [&>td]:py-1">
+                  <td className="w-20"><input value={l.accountingMonth} placeholder="2026-06" onChange={(e) => patchLocal(l.id, { accountingMonth: e.target.value })} onBlur={() => persistById(l.id)} /></td>
+                  <td className="w-16">
+                    <select
+                      value={l.settlementType}
+                      onChange={(e) => {
+                        const next = patchLocal(l.id, { settlementType: e.target.value as SettlementType });
+                        if (next) persistLine(next);
+                      }}
+                    >
+                      {SETTLEMENT_TYPES.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="w-24"><input value={l.advertiserName} onChange={(e) => patchLocal(l.id, { advertiserName: e.target.value })} onBlur={() => persistById(l.id)} /></td>
+                  <td className="w-24"><input value={l.brandName} onChange={(e) => patchLocal(l.id, { brandName: e.target.value })} onBlur={() => persistById(l.id)} /></td>
+                  <td className="w-28">
+                    <input value={l.campaignCode} placeholder="1000-C-26-0001" onChange={(e) => patchLocal(l.id, { campaignCode: e.target.value })} onBlur={() => persistById(l.id)} />
+                    {campWarn && <p className="mt-0.5 text-[10px] text-amber-600">{campWarn}</p>}
+                  </td>
+                  <td className="w-24"><input value={l.campaignName} onChange={(e) => patchLocal(l.id, { campaignName: e.target.value })} onBlur={() => persistById(l.id)} /></td>
+                  <td className="w-20"><input value={l.jobTypeName} onChange={(e) => patchLocal(l.id, { jobTypeName: e.target.value })} onBlur={() => persistById(l.id)} /></td>
+                  <td className="w-32">
+                    <input value={l.jobCode} placeholder="1000-C-26-0001.01" onChange={(e) => patchLocal(l.id, { jobCode: e.target.value })} onBlur={() => persistById(l.id)} />
+                    {jobWarn && <p className="mt-0.5 text-[10px] text-amber-600">{jobWarn}</p>}
+                  </td>
+                  <td className="w-28"><input value={l.jobName} onChange={(e) => patchLocal(l.id, { jobName: e.target.value })} onBlur={() => persistById(l.id)} /></td>
+                  <td className="w-20"><input list={OWNER_LIST_ID} value={l.ownerName} onChange={(e) => patchLocal(l.id, { ownerName: e.target.value })} onBlur={() => persistById(l.id)} /></td>
+                  <td className="w-28">
+                    <CalculationTypeSelect
+                      value={l.calculationType}
+                      onChange={(next: CalculationType) => {
+                        const updated = patchLocal(l.id, { calculationType: next });
+                        if (updated) persistLine(updated);
+                      }}
+                    />
+                  </td>
+                  <td className="w-24">
+                    <input className="cell-num" inputMode="numeric" value={num(l.gmv)} onChange={(e) => patchLocal(l.id, { gmv: parseNumberInput(e.target.value) })} onBlur={() => persistById(l.id)} />
+                  </td>
+                  <td className="w-28">
+                    <input className="cell-num" inputMode="numeric" value={num(l.revenue)} onChange={(e) => patchLocal(l.id, { revenue: parseNumberInput(e.target.value), isRevenueManual: true })} onBlur={() => persistById(l.id)} />
+                    {l.isRevenueManual && (
+                      <button onClick={() => resetRevenue(l.id)} className="mt-0.5 text-[10px] text-blue-600 hover:underline">
+                        취급고와 동일
+                      </button>
+                    )}
+                  </td>
+                  <td className="w-24">
+                    <input className="cell-num" inputMode="numeric" disabled={l.calculationType === "profit_rate" || l.calculationType === "manual_profit"} value={num(l.cost)} onChange={(e) => patchLocal(l.id, { cost: parseNumberInput(e.target.value) })} onBlur={() => persistById(l.id)} />
+                  </td>
+                  <td className="w-24">
+                    <input className="cell-num" inputMode="numeric" disabled={l.calculationType !== "manual_profit" && l.calculationType !== "mixed"} value={num(l.profit)} onChange={(e) => patchLocal(l.id, { profit: parseNumberInput(e.target.value) })} onBlur={() => persistById(l.id)} />
+                  </td>
+                  <td className="w-16">
+                    <input className="cell-num" inputMode="numeric" disabled={l.calculationType !== "profit_rate"} value={num(l.expectedMarginRate)} onChange={(e) => patchLocal(l.id, { expectedMarginRate: parseNumberInput(e.target.value) })} onBlur={() => persistById(l.id)} />
+                  </td>
+                  <td className="w-16 cell-num text-slate-500">{formatPercent(l.actualMarginRate)}</td>
+                  <td className="w-20">
+                    <select value={l.estimateStatus} onChange={(e) => {
+                      const next = patchLocal(l.id, { estimateStatus: e.target.value as EstimateLine["estimateStatus"] });
+                      if (next) persistLine(next);
+                    }}>
+                      {ESTIMATE_STATUSES.map((s) => (<option key={s} value={s}>{s}</option>))}
+                    </select>
+                  </td>
+                  <td className="w-32"><input value={l.basisNote} onChange={(e) => patchLocal(l.id, { basisNote: e.target.value })} onBlur={() => persistById(l.id)} /></td>
+                  <td className="w-32"><input value={l.remark} onChange={(e) => patchLocal(l.id, { remark: e.target.value })} onBlur={() => persistById(l.id)} /></td>
+                  <td className="w-8">
+                    <button onClick={() => removeRow(l.id)} className="text-slate-400 hover:text-red-600" title="삭제">✕</button>
+                  </td>
+                </tr>
+              );
+            })}
             {lines.length === 0 && (
               <tr>
                 <td colSpan={21} className="px-4 py-8 text-center text-slate-400">
-                  행이 없습니다. “+ 행 추가”로 시작하세요.
+                  행이 없습니다. "+ 행 추가"로 시작하세요.
                 </td>
               </tr>
             )}
@@ -218,35 +271,9 @@ export function EstimateTable({
         </table>
       </div>
       <p className="text-xs text-slate-400">
-        계산방식: 이익률·매출이익 직접입력은 원가를 자동 산출, 원가 기준은 원가 입력, 복합은 매출액·원가·매출이익을 직접 입력합니다. 매출액은 기본적으로 취급고와 동기화되며, 직접 수정하면 “취급고와 동일” 버튼으로 되돌릴 수 있습니다.
+        계산방식: 이익률·매출이익 직접입력은 원가를 자동 산출, 원가 기준은 원가 입력, 복합은 매출액·원가·매출이익을 직접 입력합니다. 매출액은 기본적으로 취급고와 동기화되며, 직접 수정하면 "취급고와 동일" 버튼으로 되돌릴 수 있습니다. 캠페인번호/JOB번호 형식 경고는 저장을 막지 않습니다.
       </p>
     </div>
   );
 }
 
-function emptyPayload(versionId: string) {
-  return {
-    versionId,
-    settlementType: "제작",
-    advertiserName: "",
-    brandName: "",
-    campaignName: "",
-    jobTypeName: "",
-    jobCode: "",
-    jobName: "",
-    accountingMonth: "",
-    gmv: 0,
-    revenue: 0,
-    isRevenueManual: false,
-    cost: 0,
-    profit: 0,
-    expectedMarginRate: 0,
-    actualMarginRate: 0,
-    calculationType: "profit_rate",
-    estimateStatus: "예상",
-    confidenceLevel: "Mid",
-    basisNote: "",
-    remark: "",
-    ownerName: "",
-  };
-}

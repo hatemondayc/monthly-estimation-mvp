@@ -11,15 +11,19 @@ function cell(value: string | number): string {
   return s;
 }
 
+// 테이블 컬럼 순서와 동일하게 정렬 (엑셀 정합성).
 const LINE_HEADERS = [
+  "회계기간",
   "정산구분",
   "광고주",
   "브랜드",
-  "캠페인",
+  "캠페인번호",
+  "캠페인명",
   "JOB유형",
-  "JOB코드",
+  "JOB번호",
   "JOB명",
-  "회계기간",
+  "담당자",
+  "계산방식",
   "취급고",
   "매출액",
   "매출액수동",
@@ -27,24 +31,24 @@ const LINE_HEADERS = [
   "매출이익",
   "예상이익률",
   "실적이익률",
-  "계산방식",
   "상태",
-  "신뢰도",
   "추정근거",
   "비고",
-  "담당자",
 ];
 
 function lineToRow(l: EstimateLine): (string | number)[] {
   return [
+    l.accountingMonth,
     l.settlementType,
     l.advertiserName,
     l.brandName,
+    l.campaignCode,
     l.campaignName,
     l.jobTypeName,
     l.jobCode,
     l.jobName,
-    l.accountingMonth,
+    l.ownerName,
+    l.calculationType,
     l.gmv,
     l.revenue,
     l.isRevenueManual ? "Y" : "N",
@@ -52,12 +56,9 @@ function lineToRow(l: EstimateLine): (string | number)[] {
     l.profit,
     l.expectedMarginRate,
     Number(l.actualMarginRate.toFixed(1)),
-    l.calculationType,
     l.estimateStatus,
-    l.confidenceLevel,
     l.basisNote,
     l.remark,
-    l.ownerName,
   ];
 }
 
@@ -74,9 +75,15 @@ export function buildCsv(
   for (const l of lines) {
     rows.push(lineToRow(l).map(cell).join(","));
   }
-  // 요약 블록
+  // 요약 블록 (헤더 순서 기준: 취급고=11, 매출액=12, 매출이익=15, 실적이익률=17)
   rows.push("");
-  rows.push(["합계", "", "", "", "", "", "", "", summary.totalGmv, summary.totalRevenue, "", "", summary.totalProfit, "", Number(summary.marginRate.toFixed(1))].map(cell).join(","));
+  const summaryRow: (string | number)[] = new Array(LINE_HEADERS.length).fill("");
+  summaryRow[0] = "합계";
+  summaryRow[11] = summary.totalGmv;
+  summaryRow[12] = summary.totalRevenue;
+  summaryRow[15] = summary.totalProfit;
+  summaryRow[17] = Number(summary.marginRate.toFixed(1));
+  rows.push(summaryRow.map(cell).join(","));
 
   return "﻿" + rows.join("\r\n");
 }

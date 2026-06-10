@@ -1,8 +1,17 @@
+import { isAuthenticated } from "@/lib/auth";
 import { getLines, getSummary, getVersion } from "@/lib/data";
 import { buildCsv } from "@/lib/csv";
 
 /** 월/버전 단위 CSV 다운로드 (PRD §11.5). ?versionId= 필수. */
 export async function GET(req: Request) {
+  // Fix 6: 인증 확인 — 미인증 요청이 원장 데이터를 CSV로 내보내지 못하게 한다.
+  if (!(await isAuthenticated())) {
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const { searchParams } = new URL(req.url);
   const versionId = searchParams.get("versionId");
   if (!versionId) {

@@ -27,3 +27,9 @@ Thumbs.db
 
 # misc
 *.log
+
+# TypeScript incremental build cache
+tsconfig.tsbuildinfo
+
+# editor/agent local config (machine-specific paths)
+/.claude

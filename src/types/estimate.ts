@@ -16,9 +16,6 @@ export type CalculationType =
 /** 추정 상태 (PRD §7.2). */
 export type EstimateStatus = "예상" | "진행중" | "확정" | "이월가능" | "제외";
 
-/** 신뢰도 (PRD §7.2). */
-export type ConfidenceLevel = "High" | "Mid" | "Low";
-
 /** 월별 추정 버전 단위 (PRD §7.1). */
 export interface EstimateVersion {
   id: string;
@@ -39,6 +36,7 @@ export interface EstimateLine {
   settlementType: SettlementType;
   advertiserName: string;
   brandName: string;
+  campaignCode: string; // 캠페인번호 (예: 1000-C-26-0001)
   campaignName: string;
   jobTypeName: string;
   jobCode: string;
@@ -53,7 +51,6 @@ export interface EstimateLine {
   actualMarginRate: number; // 실적이익률 (%) — 계산값
   calculationType: CalculationType;
   estimateStatus: EstimateStatus;
-  confidenceLevel: ConfidenceLevel;
   basisNote: string; // 추정근거
   remark: string; // 비고
   ownerName: string; // 담당자
@@ -88,8 +85,6 @@ export const ESTIMATE_STATUSES: EstimateStatus[] = [
   "이월가능",
   "제외",
 ];
-
-export const CONFIDENCE_LEVELS: ConfidenceLevel[] = ["High", "Mid", "Low"];
 
 export const ROUND_LABELS: Record<RoundType, string> = {
   first: "1차 추정",

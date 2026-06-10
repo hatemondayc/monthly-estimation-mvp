@@ -66,23 +66,51 @@ export function getLines(versionId?: string): Promise<EstimateLine[]> {
   return repository.listLines(versionId);
 }
 
-export function createLine(input: NewLineInput): Promise<EstimateLine> {
-  return repository.createLine(applyCalc(input));
+export async function createLine(input: NewLineInput): Promise<EstimateLine> {
+  const line = await repository.createLine(applyCalc(input));
+  // 신규 담당자는 owners 마스터에 등록해 datalist가 즉시 반영되도록 한다.
+  if (input.ownerName.trim()) {
+    await repository.addOwner(input.ownerName);
+  }
+  return line;
 }
 
 export async function updateLine(
   id: string,
   patch: Partial<EstimateLine>,
 ): Promise<EstimateLine | null> {
-  const existing = await repository.listLines();
-  const current = existing.find((l) => l.id === id);
-  if (!current) return null;
-  const merged = applyCalc({ ...current, ...patch });
-  return repository.updateLine(id, merged);
+  // patch가 partial일 수 있으므로 기존 행을 먼저 읽어 merge한 뒤 재계산한다.
+  // applyCalc에 partial을 그대로 넘기면 undefined 필드가 재무 값을 덮어쓴다.
+  const existing = await repository.getLine(id);
+  if (!existing) return null;
+  const merged = applyCalc({ ...existing, ...patch });
+  const line = await repository.updateLine(id, merged);
+  if (line && patch.ownerName?.trim()) {
+    await repository.addOwner(patch.ownerName);
+  }
+  return line;
 }
 
 export function deleteLine(id: string): Promise<boolean> {
   return repository.deleteLine(id);
+}
+
+/** owners 마스터 + 행에서 담당자명 unique 목록을 반환한다 — datalist 자동완성용. */
+export async function getOwnerNames(): Promise<string[]> {
+  const [owners, lines] = await Promise.all([
+    repository.listOwners(),
+    repository.listLines(),
+  ]);
+  const names = new Set<string>(owners);
+  for (const l of lines) {
+    if (l.ownerName.trim()) names.add(l.ownerName.trim());
+  }
+  return [...names].sort((a, b) => a.localeCompare(b, "ko"));
+}
+
+/** 담당자 마스터에 이름을 추가한다 (trim·빈값 skip은 repository 내부에서 처리). */
+export function addOwner(name: string): Promise<void> {
+  return repository.addOwner(name);
 }
 
 // ── 요약 / 비교 ────────────────────────────────────────────────────
@@ -160,12 +188,11 @@ export async function getCompare(
   const firstVersion = scoped.find((v) => v.roundType === "first") ?? null;
   const updateVersion = scoped.find((v) => v.roundType === "update") ?? null;
 
-  const firstLines = firstVersion
-    ? await repository.listLines(firstVersion.id)
-    : [];
-  const updatedLines = updateVersion
-    ? await repository.listLines(updateVersion.id)
-    : [];
+  // Fix 8: 두 listLines 호출을 병렬로 실행해 순차적 파일 읽기 2회를 1회로 줄인다.
+  const [firstLines, updatedLines] = await Promise.all([
+    firstVersion ? repository.listLines(firstVersion.id) : Promise.resolve([]),
+    updateVersion ? repository.listLines(updateVersion.id) : Promise.resolve([]),
+  ]);
 
   const fs = summarize(firstLines);
   const us = summarize(updatedLines);
@@ -198,6 +225,7 @@ export function emptyLine(versionId: string): NewLineInput {
     settlementType: "제작",
     advertiserName: "",
     brandName: "",
+    campaignCode: "",
     campaignName: "",
     jobTypeName: "",
     jobCode: "",
@@ -212,7 +240,6 @@ export function emptyLine(versionId: string): NewLineInput {
     actualMarginRate: 0,
     calculationType: "profit_rate",
     estimateStatus: "예상",
-    confidenceLevel: "Mid",
     basisNote: "",
     remark: "",
     ownerName: "",

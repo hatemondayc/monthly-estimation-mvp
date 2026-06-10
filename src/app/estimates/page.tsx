@@ -1,6 +1,6 @@
 // 추정 입력 화면 (PRD §11.3). 버전 선택 후 행 단위 입력.
 
-import { getLines, getVersions } from "@/lib/data";
+import { getLines, getOwnerNames, getVersions } from "@/lib/data";
 import { EstimateTable } from "@/components/EstimateTable";
 import { VersionSwitcher } from "@/components/VersionSwitcher";
 import { ROUND_LABELS } from "@/types/estimate";
@@ -22,7 +22,10 @@ export default async function EstimatesPage({
   }
 
   const selected = versions.find((v) => v.id === versionId) ?? versions[0];
-  const lines = await getLines(selected.id);
+  const [lines, ownerOptions] = await Promise.all([
+    getLines(selected.id),
+    getOwnerNames(),
+  ]);
 
   return (
     <div className="space-y-4">
@@ -45,6 +48,7 @@ export default async function EstimatesPage({
         key={selected.id}
         versionId={selected.id}
         initialLines={lines}
+        ownerOptions={ownerOptions}
       />
     </div>
   );
