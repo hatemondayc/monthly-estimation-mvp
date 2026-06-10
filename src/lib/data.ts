@@ -79,9 +79,8 @@ export async function updateLine(
   id: string,
   patch: Partial<EstimateLine>,
 ): Promise<EstimateLine | null> {
-  // 기존 행을 먼저 읽어 patch와 merge한 뒤 재계산한다.
-  // enqueue 바깥에서 읽어도 repository.updateLine이 enqueue 안에서
-  // 다시 읽어 쓰기 때문에 데이터 안전성에는 영향이 없다.
+  // patch가 partial일 수 있으므로 기존 행을 먼저 읽어 merge한 뒤 재계산한다.
+  // applyCalc에 partial을 그대로 넘기면 undefined 필드가 재무 값을 덮어쓴다.
   const existing = await repository.getLine(id);
   if (!existing) return null;
   const merged = applyCalc({ ...existing, ...patch });
