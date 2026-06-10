@@ -12,12 +12,23 @@ export function validateNumericFields(
 ): string | null {
   for (const field of fields) {
     const val = body[field];
+    if (val === null) return field;
     if (val !== undefined && !Number.isFinite(Number(val))) {
       return field;
     }
   }
   return null;
 }
+
+/** API route 두 곳에서 공통으로 사용하는 숫자 필드 목록. */
+export const LINE_NUMERIC_FIELDS = [
+  "gmv",
+  "revenue",
+  "cost",
+  "profit",
+  "expectedMarginRate",
+  "actualMarginRate",
+] as const;
 
 const CAMPAIGN_CODE_RE = /^1000-C-\d{2}-\d{4}$/;
 const JOB_CODE_RE = /^1000-C-\d{2}-\d{4}\.\d{2}$/;

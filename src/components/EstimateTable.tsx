@@ -8,6 +8,7 @@ import { useRef, useState } from "react";
 
 import { CalculationTypeSelect } from "@/components/CalculationTypeSelect";
 import { calculateLine } from "@/lib/calculations";
+import { emptyLine } from "@/lib/data";
 import { formatPercent, parseNumberInput } from "@/lib/format";
 import { campaignCodeWarning, jobCodeWarning } from "@/lib/validation";
 import { ESTIMATE_STATUSES, SETTLEMENT_TYPES } from "@/types/estimate";
@@ -51,16 +52,20 @@ export function EstimateTable({
   linesRef.current = lines;
 
   // patch를 로컬 상태에 반영하고 재계산된 행을 반환한다.
+  // setLines updater 안에서 linesRef.current를 동기 갱신해
+  // onChange → onBlur 사이에 re-render가 없어도 최신 값을 읽을 수 있게 한다.
   function patchLocal(id: string, patch: Partial<EstimateLine>): EstimateLine | null {
     let result: EstimateLine | null = null;
-    setLines((prev) =>
-      prev.map((l) => {
+    setLines((prev) => {
+      const next = prev.map((l) => {
         if (l.id !== id) return l;
-        const next = recompute({ ...l, ...patch });
-        result = next;
-        return next;
-      }),
-    );
+        const updated = recompute({ ...l, ...patch });
+        result = updated;
+        return updated;
+      });
+      linesRef.current = next;
+      return next;
+    });
     return result;
   }
 
@@ -90,7 +95,7 @@ export function EstimateTable({
     const res = await fetch("/api/lines", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(emptyPayload(versionId)),
+      body: JSON.stringify(emptyLine(versionId)),
     });
     setBusy(false);
     if (res.ok) {
@@ -272,29 +277,3 @@ export function EstimateTable({
   );
 }
 
-function emptyPayload(versionId: string) {
-  return {
-    versionId,
-    settlementType: "제작",
-    advertiserName: "",
-    brandName: "",
-    campaignCode: "",
-    campaignName: "",
-    jobTypeName: "",
-    jobCode: "",
-    jobName: "",
-    accountingMonth: "",
-    gmv: 0,
-    revenue: 0,
-    isRevenueManual: false,
-    cost: 0,
-    profit: 0,
-    expectedMarginRate: 0,
-    actualMarginRate: 0,
-    calculationType: "profit_rate",
-    estimateStatus: "예상",
-    basisNote: "",
-    remark: "",
-    ownerName: "",
-  };
-}
