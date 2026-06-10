@@ -171,6 +171,78 @@ node_modules
 
 If a local SQLite DB contains real or semi-real data, never commit it.
 
+## Branch Strategy
+
+Use GitHub Flow with two active branch types only.
+
+```text
+main       ← always working code. PR-only. No direct push.
+feature/*  ← one feature or bugfix per branch. Merge into main. Delete after merge.
+fix/*      ← bug fix only.
+chore/*    ← config, .gitignore, deps, docs only.
+```
+
+### Branch naming examples
+
+```text
+feature/estimate-table-ui
+feature/calculation-logic
+feature/version-compare-view
+feature/csv-export
+feature/auth-gate
+fix/gmv-revenue-sync-bug
+chore/gitignore-sqlite
+```
+
+### Branch rules
+
+1. One branch = one task from NEXT_TASK.md.
+2. Branch from main. Merge back to main after approval.
+3. Delete the branch after merge.
+4. Do not push directly to main.
+5. Each branch should be small enough to review in one session.
+
+## Commit Convention
+
+```text
+feat:     new feature
+fix:      bug fix
+refactor: code change without behavior change
+chore:    config, deps, .gitignore
+docs:     documentation only
+test:     test add or fix
+```
+
+Example:
+
+```text
+feat: EstimateTable 기본 UI 구현
+fix: gmv 입력 시 revenue 자동 동기화 처리
+chore: prisma/dev.db gitignore 추가
+```
+
+## PowerShell Workflow (Windows)
+
+Start of task:
+
+```powershell
+git checkout main
+git pull origin main
+git checkout -b feature/your-task-name
+```
+
+End of task:
+
+```powershell
+git add .
+git commit -m "feat: task description"
+git push origin feature/your-task-name
+# Then open PR on GitHub → review → merge → delete branch
+git checkout main
+git pull origin main
+git branch -d feature/your-task-name
+```
+
 ---
 
 # 7. Core Data Contract
@@ -199,6 +271,7 @@ versionId
 settlementType
 advertiserName
 brandName
+campaignCode
 campaignName
 jobTypeName
 jobCode
@@ -213,7 +286,6 @@ expectedMarginRate
 actualMarginRate
 calculationType
 estimateStatus
-confidenceLevel
 basisNote
 remark
 ownerName
@@ -315,7 +387,7 @@ Rules:
 
 1. When gmv changes and isRevenueManual is false, sync revenue with gmv.
 2. When user manually edits revenue, set isRevenueManual to true.
-3. Provide a reset option: “취급고와 동일하게 재설정”.
+3. Provide a reset option: "취급고와 동일하게 재설정".
 4. On reset, set revenue = gmv and isRevenueManual = false.
 
 ---
@@ -383,7 +455,6 @@ Must support:
 - profit
 - margin rate
 - estimate status
-- confidence level
 - basis note
 - remark
 - owner name
@@ -416,19 +487,19 @@ CSV import is optional.
 
 # 12. Recommended Stack
 
-Preferred:
+Current implementation:
 
 ```text
-Next.js
+Next.js (App Router)
 TypeScript
-Prisma
-SQLite
+JSON file store (src/lib/repository.ts — Repository interface, swappable to Prisma/Supabase)
 Tailwind CSS
 ```
 
 Optional later:
 
 ```text
+Prisma + SQLite
 Supabase
 ```
 
@@ -467,9 +538,6 @@ monthly-estimation-mvp/
 
     types/
       estimate.ts
-
-  prisma/
-    schema.prisma
 
   docs/
     PRODUCT_SPEC.md
