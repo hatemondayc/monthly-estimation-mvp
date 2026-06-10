@@ -74,15 +74,24 @@ export async function updateLine(
   id: string,
   patch: Partial<EstimateLine>,
 ): Promise<EstimateLine | null> {
-  const existing = await repository.listLines();
-  const current = existing.find((l) => l.id === id);
-  if (!current) return null;
-  const merged = applyCalc({ ...current, ...patch });
-  return repository.updateLine(id, merged);
+  // Fix 7: repository.updateLine이 내부 lock 안에서 read→write를 처리하므로
+  // listLines()로 행을 미리 읽는 이중 읽기를 제거한다.
+  // EstimateTable은 항상 재계산된 전체 행을 전송하므로 patch를 전체 행으로 캐스팅해도 안전하다.
+  return repository.updateLine(id, applyCalc(patch as EstimateLine));
 }
 
 export function deleteLine(id: string): Promise<boolean> {
   return repository.deleteLine(id);
+}
+
+/** 전체 행에서 담당자명을 unique 추출 — 담당자 입력 자동완성용. (별도 사용자 테이블 없음) */
+export async function getOwnerNames(): Promise<string[]> {
+  const lines = await repository.listLines();
+  const names = new Set<string>();
+  for (const l of lines) {
+    if (l.ownerName.trim()) names.add(l.ownerName.trim());
+  }
+  return [...names].sort((a, b) => a.localeCompare(b, "ko"));
 }
 
 // ── 요약 / 비교 ────────────────────────────────────────────────────
@@ -160,12 +169,11 @@ export async function getCompare(
   const firstVersion = scoped.find((v) => v.roundType === "first") ?? null;
   const updateVersion = scoped.find((v) => v.roundType === "update") ?? null;
 
-  const firstLines = firstVersion
-    ? await repository.listLines(firstVersion.id)
-    : [];
-  const updatedLines = updateVersion
-    ? await repository.listLines(updateVersion.id)
-    : [];
+  // Fix 8: 두 listLines 호출을 병렬로 실행해 순차적 파일 읽기 2회를 1회로 줄인다.
+  const [firstLines, updatedLines] = await Promise.all([
+    firstVersion ? repository.listLines(firstVersion.id) : Promise.resolve([]),
+    updateVersion ? repository.listLines(updateVersion.id) : Promise.resolve([]),
+  ]);
 
   const fs = summarize(firstLines);
   const us = summarize(updatedLines);
@@ -198,6 +206,7 @@ export function emptyLine(versionId: string): NewLineInput {
     settlementType: "제작",
     advertiserName: "",
     brandName: "",
+    campaignCode: "",
     campaignName: "",
     jobTypeName: "",
     jobCode: "",
@@ -212,7 +221,6 @@ export function emptyLine(versionId: string): NewLineInput {
     actualMarginRate: 0,
     calculationType: "profit_rate",
     estimateStatus: "예상",
-    confidenceLevel: "Mid",
     basisNote: "",
     remark: "",
     ownerName: "",

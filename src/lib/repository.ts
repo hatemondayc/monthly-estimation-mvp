@@ -41,10 +41,32 @@ function nowIso(): string {
 
 /** JSON 파일 기반 저장소 구현. */
 class FileRepository implements EstimateRepository {
+  // Fix 4: 쓰기 직렬화 큐 — 동시 요청이 같은 파일을 read-modify-write 할 때
+  // 중간 상태를 덮어쓰지 않도록 한 번에 하나의 쓰기 작업만 실행한다.
+  private writeQueue: Promise<void> = Promise.resolve();
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.writeQueue.then(task, task);
+    // writeQueue는 에러를 삼키지 않도록 항상 void 체인으로 유지한다.
+    this.writeQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
   private async read(): Promise<Store> {
     try {
       const raw = await fs.readFile(DATA_FILE, "utf-8");
-      const parsed = JSON.parse(raw) as Store;
+      // Fix 3: JSON.parse가 SyntaxError를 던지면 파일이 깨진 것이므로 시드로 복구한다.
+      let parsed: Store;
+      try {
+        parsed = JSON.parse(raw) as Store;
+      } catch {
+        const seed = buildSeed();
+        await this.write(seed);
+        return seed;
+      }
       return {
         versions: parsed.versions ?? [],
         lines: parsed.lines ?? [],
@@ -78,45 +100,50 @@ class FileRepository implements EstimateRepository {
   async createVersion(
     data: Omit<EstimateVersion, "id" | "createdAt" | "updatedAt">,
   ): Promise<EstimateVersion> {
-    const store = await this.read();
-    const version: EstimateVersion = {
-      ...data,
-      id: randomUUID(),
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    };
-    store.versions.push(version);
-    await this.write(store);
-    return version;
+    return this.enqueue(async () => {
+      const store = await this.read();
+      const version: EstimateVersion = {
+        ...data,
+        id: randomUUID(),
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      };
+      store.versions.push(version);
+      await this.write(store);
+      return version;
+    });
   }
 
   async updateVersion(
     id: string,
     patch: Partial<EstimateVersion>,
   ): Promise<EstimateVersion | null> {
-    const store = await this.read();
-    const idx = store.versions.findIndex((v) => v.id === id);
-    if (idx === -1) return null;
-    const updated: EstimateVersion = {
-      ...store.versions[idx],
-      ...patch,
-      id: store.versions[idx].id,
-      updatedAt: nowIso(),
-    };
-    store.versions[idx] = updated;
-    await this.write(store);
-    return updated;
+    return this.enqueue(async () => {
+      const store = await this.read();
+      const idx = store.versions.findIndex((v) => v.id === id);
+      if (idx === -1) return null;
+      const updated: EstimateVersion = {
+        ...store.versions[idx],
+        ...patch,
+        id: store.versions[idx].id,
+        updatedAt: nowIso(),
+      };
+      store.versions[idx] = updated;
+      await this.write(store);
+      return updated;
+    });
   }
 
   async deleteVersion(id: string): Promise<boolean> {
-    const store = await this.read();
-    const before = store.versions.length;
-    store.versions = store.versions.filter((v) => v.id !== id);
-    // 연결된 행도 함께 삭제 (cascade)
-    store.lines = store.lines.filter((l) => l.versionId !== id);
-    const removed = store.versions.length !== before;
-    if (removed) await this.write(store);
-    return removed;
+    return this.enqueue(async () => {
+      const store = await this.read();
+      const before = store.versions.length;
+      store.versions = store.versions.filter((v) => v.id !== id);
+      store.lines = store.lines.filter((l) => l.versionId !== id);
+      const removed = store.versions.length !== before;
+      if (removed) await this.write(store);
+      return removed;
+    });
   }
 
   async listLines(versionId?: string): Promise<EstimateLine[]> {
@@ -129,43 +156,49 @@ class FileRepository implements EstimateRepository {
   async createLine(
     data: Omit<EstimateLine, "id" | "createdAt" | "updatedAt">,
   ): Promise<EstimateLine> {
-    const store = await this.read();
-    const ln: EstimateLine = {
-      ...data,
-      id: randomUUID(),
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    };
-    store.lines.push(ln);
-    await this.write(store);
-    return ln;
+    return this.enqueue(async () => {
+      const store = await this.read();
+      const ln: EstimateLine = {
+        ...data,
+        id: randomUUID(),
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      };
+      store.lines.push(ln);
+      await this.write(store);
+      return ln;
+    });
   }
 
   async updateLine(
     id: string,
     patch: Partial<EstimateLine>,
   ): Promise<EstimateLine | null> {
-    const store = await this.read();
-    const idx = store.lines.findIndex((l) => l.id === id);
-    if (idx === -1) return null;
-    const updated: EstimateLine = {
-      ...store.lines[idx],
-      ...patch,
-      id: store.lines[idx].id,
-      updatedAt: nowIso(),
-    };
-    store.lines[idx] = updated;
-    await this.write(store);
-    return updated;
+    return this.enqueue(async () => {
+      const store = await this.read();
+      const idx = store.lines.findIndex((l) => l.id === id);
+      if (idx === -1) return null;
+      const updated: EstimateLine = {
+        ...store.lines[idx],
+        ...patch,
+        id: store.lines[idx].id,
+        updatedAt: nowIso(),
+      };
+      store.lines[idx] = updated;
+      await this.write(store);
+      return updated;
+    });
   }
 
   async deleteLine(id: string): Promise<boolean> {
-    const store = await this.read();
-    const before = store.lines.length;
-    store.lines = store.lines.filter((l) => l.id !== id);
-    const removed = store.lines.length !== before;
-    if (removed) await this.write(store);
-    return removed;
+    return this.enqueue(async () => {
+      const store = await this.read();
+      const before = store.lines.length;
+      store.lines = store.lines.filter((l) => l.id !== id);
+      const removed = store.lines.length !== before;
+      if (removed) await this.write(store);
+      return removed;
+    });
   }
 }
 
