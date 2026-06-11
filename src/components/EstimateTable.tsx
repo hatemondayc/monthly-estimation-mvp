@@ -4,11 +4,11 @@
 // 즉시 피드백은 로컬 재계산(calculateLine)으로, 영속화는 onBlur/onChange 시 API 호출로.
 // 컬럼 순서는 기존 회사 엑셀 흐름(식별 → 금액 → 상태/메모)에 맞춘다.
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { CalculationTypeSelect } from "@/components/CalculationTypeSelect";
 import { calculateLine } from "@/lib/calculations";
-import { formatPercent, parseNumberInput } from "@/lib/format";
+import { formatAccountingMonth, formatPercent, parseNumberInput } from "@/lib/format";
 import { campaignCodeWarning, jobCodeWarning } from "@/lib/validation";
 import { ESTIMATE_STATUSES, SETTLEMENT_TYPES } from "@/types/estimate";
 import type {
@@ -32,6 +32,13 @@ function recompute(line: EstimateLine): EstimateLine {
 
 const OWNER_LIST_ID = "owner-options";
 
+/** 데이터가 있는 가장 최신 accountingMonth, 없으면 현재 월(YYYY-MM). */
+function latestMonth(lines: EstimateLine[]): string {
+  const months = lines.map((l) => l.accountingMonth).filter(Boolean);
+  if (months.length === 0) return new Date().toISOString().slice(0, 7);
+  return months.reduce((a, b) => (a > b ? a : b));
+}
+
 export function EstimateTable({
   versionId,
   initialLines,
@@ -49,6 +56,32 @@ export function EstimateTable({
   // useRef로 lines 최신값을 항상 추적 — onBlur stale closure 방지.
   const linesRef = useRef(lines);
   linesRef.current = lines;
+
+  // 월/정산구분 탭 필터 (UI 레벨). 추후 Supabase 전환 시 서버 쿼리로 옮기기 쉽게 state로 분리.
+  const [selectedMonth, setSelectedMonth] = useState<string>(() =>
+    latestMonth(initialLines),
+  );
+  const [selectedSettlement, setSelectedSettlement] =
+    useState<SettlementType>("제작");
+
+  // 월 탭 목록 = 현재 행들의 distinct accountingMonth ∪ 선택 월 (정렬).
+  const monthTabs = useMemo(() => {
+    const set = new Set<string>();
+    for (const l of lines) if (l.accountingMonth) set.add(l.accountingMonth);
+    set.add(selectedMonth);
+    return [...set].sort();
+  }, [lines, selectedMonth]);
+
+  // 선택 월 + 정산구분에 해당하는 행만 표시.
+  const visibleLines = useMemo(
+    () =>
+      lines.filter(
+        (l) =>
+          l.accountingMonth === selectedMonth &&
+          l.settlementType === selectedSettlement,
+      ),
+    [lines, selectedMonth, selectedSettlement],
+  );
 
   // patch를 로컬 상태에 반영하고 재계산된 행을 반환한다.
   // setLines updater 안에서 linesRef.current를 동기 갱신해
@@ -94,7 +127,9 @@ export function EstimateTable({
     const res = await fetch("/api/lines", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(emptyPayload(versionId)),
+      body: JSON.stringify(
+        emptyPayload(versionId, selectedMonth, selectedSettlement),
+      ),
     });
     setBusy(false);
     if (res.ok) {
@@ -124,13 +159,52 @@ export function EstimateTable({
 
   const num = (v: number) => (v === 0 ? "" : String(v));
 
+  const csvHref =
+    `/api/export?versionId=${versionId}` +
+    `&accountingMonth=${encodeURIComponent(selectedMonth)}` +
+    `&settlementType=${encodeURIComponent(selectedSettlement)}`;
+
   return (
     <div className="space-y-3">
+      {/* 회계기간 월 탭 — 엑셀 흐름에 맞춰 선택 월 행만 표시. 라벨은 YYYY.MM. */}
+      <div className="flex flex-wrap gap-1 border-b border-slate-200">
+        {monthTabs.map((m) => (
+          <button
+            key={m}
+            onClick={() => setSelectedMonth(m)}
+            className={`rounded-t px-3 py-1.5 text-sm ${
+              m === selectedMonth
+                ? "border-b-2 border-slate-900 font-medium text-slate-900"
+                : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {formatAccountingMonth(m)}
+          </button>
+        ))}
+      </div>
+
+      {/* 제작/매체 탭 — 선택 정산구분 행만 표시. 기본 제작. */}
+      <div className="flex gap-1">
+        {SETTLEMENT_TYPES.map((s) => (
+          <button
+            key={s}
+            onClick={() => setSelectedSettlement(s)}
+            className={`rounded px-3 py-1 text-sm ${
+              s === selectedSettlement
+                ? "bg-slate-900 text-white"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+
       <div className="flex items-center justify-between">
-        <span className="text-sm text-slate-500">{lines.length}건</span>
+        <span className="text-sm text-slate-500">{visibleLines.length}건</span>
         <div className="flex gap-2">
           <a
-            href={`/api/export?versionId=${versionId}`}
+            href={csvHref}
             className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
           >
             CSV 내보내기
@@ -180,7 +254,7 @@ export function EstimateTable({
             </tr>
           </thead>
           <tbody className="[&_input]:w-full [&_input]:rounded [&_input]:border [&_input]:border-slate-200 [&_input]:px-1.5 [&_input]:py-1 [&_select]:rounded [&_select]:border [&_select]:border-slate-200 [&_select]:px-1 [&_select]:py-1">
-            {lines.map((l) => {
+            {visibleLines.map((l) => {
               const campWarn = campaignCodeWarning(l.campaignCode);
               const jobWarn = jobCodeWarning(l.jobCode, l.campaignCode);
               return (
@@ -259,10 +333,10 @@ export function EstimateTable({
                 </tr>
               );
             })}
-            {lines.length === 0 && (
+            {visibleLines.length === 0 && (
               <tr>
                 <td colSpan={21} className="px-4 py-8 text-center text-slate-400">
-                  행이 없습니다. "+ 행 추가"로 시작하세요.
+                  {formatAccountingMonth(selectedMonth)} · {selectedSettlement} 행이 없습니다. "+ 행 추가"로 시작하세요.
                 </td>
               </tr>
             )}
@@ -278,10 +352,15 @@ export function EstimateTable({
 
 // 신규 행 POST 기본값. 클라이언트 컴포넌트는 서버 데이터 계층(data/repository)에
 // 의존하면 안 되므로(node:crypto 등 번들 오염) 여기서 로컬로 정의한다. (CLAUDE.md §12)
-function emptyPayload(versionId: string) {
+// 선택된 월 탭/정산구분 탭 값을 기본값으로 받아 새 행이 현재 탭에 바로 들어가게 한다.
+function emptyPayload(
+  versionId: string,
+  accountingMonth: string,
+  settlementType: SettlementType,
+) {
   return {
     versionId,
-    settlementType: "제작",
+    settlementType,
     advertiserName: "",
     brandName: "",
     campaignCode: "",
@@ -289,7 +368,7 @@ function emptyPayload(versionId: string) {
     jobTypeName: "",
     jobCode: "",
     jobName: "",
-    accountingMonth: "",
+    accountingMonth,
     gmv: 0,
     revenue: 0,
     isRevenueManual: false,

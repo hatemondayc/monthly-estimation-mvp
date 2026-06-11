@@ -28,6 +28,15 @@ export function formatDeltaPercent(value: number): string {
 }
 
 /**
+ * 회계기간 표시용 포맷. 저장값 `YYYY-MM`을 엑셀 표기 `YYYY.MM`로 보여준다.
+ * 저장 포맷은 그대로 유지하고 표시에만 사용한다. 형식이 다르면 원본을 반환.
+ */
+export function formatAccountingMonth(value: string): string {
+  if (/^\d{4}-\d{2}$/.test(value)) return value.replace("-", ".");
+  return value;
+}
+
+/**
  * 문자열 입력을 숫자로 정규화한다.
  * 콤마/공백/원화기호를 제거하고, 빈 값은 0으로 처리한다.
  */
