@@ -12,8 +12,9 @@ export function validateNumericFields(
 ): string | null {
   for (const field of fields) {
     const val = body[field];
-    if (val === null) return field;
-    if (val !== undefined && !Number.isFinite(Number(val))) {
+    // 필드 미포함(undefined)은 허용. 그 외에는 반드시 유한한 number 타입이어야 한다.
+    // Number(val) 강제변환을 쓰면 "", true, [] 등이 0/1로 통과하므로 typeof로 막는다.
+    if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
       return field;
     }
   }

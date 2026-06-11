@@ -22,13 +22,17 @@ export interface EstimateRepository {
   deleteVersion(id: string): Promise<boolean>;
 
   listLines(versionId?: string): Promise<EstimateLine[]>;
-  getLine(id: string): Promise<EstimateLine | null>;
   createLine(
     data: Omit<EstimateLine, "id" | "createdAt" | "updatedAt">,
   ): Promise<EstimateLine>;
+  /**
+   * patch를 기존 행과 merge한다. recompute가 주어지면 merge된 행에 적용한 뒤 저장한다.
+   * read→merge→recompute→write가 모두 enqueue 락 안에서 일어나 동시쓰기 경쟁이 없다.
+   */
   updateLine(
     id: string,
     patch: Partial<EstimateLine>,
+    recompute?: (line: EstimateLine) => EstimateLine,
   ): Promise<EstimateLine | null>;
   deleteLine(id: string): Promise<boolean>;
 
@@ -158,11 +162,6 @@ class FileRepository implements EstimateRepository {
       : store.lines;
   }
 
-  async getLine(id: string): Promise<EstimateLine | null> {
-    const store = await this.read();
-    return store.lines.find((l) => l.id === id) ?? null;
-  }
-
   async createLine(
     data: Omit<EstimateLine, "id" | "createdAt" | "updatedAt">,
   ): Promise<EstimateLine> {
@@ -183,17 +182,22 @@ class FileRepository implements EstimateRepository {
   async updateLine(
     id: string,
     patch: Partial<EstimateLine>,
+    recompute?: (line: EstimateLine) => EstimateLine,
   ): Promise<EstimateLine | null> {
     return this.enqueue(async () => {
       const store = await this.read();
       const idx = store.lines.findIndex((l) => l.id === id);
       if (idx === -1) return null;
-      const updated: EstimateLine = {
+      let updated: EstimateLine = {
         ...store.lines[idx],
         ...patch,
         id: store.lines[idx].id,
         updatedAt: nowIso(),
       };
+      // 파생 필드 재계산은 락 안에서 최신 행 기준으로 수행 — stale read 경쟁 방지.
+      if (recompute) {
+        updated = { ...recompute(updated), id: updated.id, updatedAt: updated.updatedAt };
+      }
       store.lines[idx] = updated;
       await this.write(store);
       return updated;
