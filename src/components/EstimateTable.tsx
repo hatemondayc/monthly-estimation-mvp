@@ -8,7 +8,7 @@ import { useMemo, useRef, useState } from "react";
 
 import { CalculationTypeSelect } from "@/components/CalculationTypeSelect";
 import { calculateLine } from "@/lib/calculations";
-import { formatAccountingMonth, formatPercent, parseNumberInput } from "@/lib/format";
+import { formatAccountingMonth, isValidMonth, formatPercent, parseNumberInput } from "@/lib/format";
 import { campaignCodeWarning, jobCodeWarning } from "@/lib/validation";
 import { ESTIMATE_STATUSES, SETTLEMENT_TYPES } from "@/types/estimate";
 import type {
@@ -32,11 +32,18 @@ function recompute(line: EstimateLine): EstimateLine {
 
 const OWNER_LIST_ID = "owner-options";
 
-/** 데이터가 있는 가장 최신 accountingMonth, 없으면 현재 월(YYYY-MM). */
-function latestMonth(lines: EstimateLine[]): string {
-  const months = lines.map((l) => l.accountingMonth).filter(Boolean);
+/** 유효한(YYYY-MM) accountingMonth만 추출해 정렬 반환. */
+function validMonthsFromLines(lines: EstimateLine[]): string[] {
+  const set = new Set<string>();
+  for (const l of lines) if (isValidMonth(l.accountingMonth)) set.add(l.accountingMonth);
+  return [...set].sort();
+}
+
+/** 유효한 월 중 가장 최신, 없으면 현재 월(YYYY-MM). */
+function latestValidMonth(lines: EstimateLine[]): string {
+  const months = validMonthsFromLines(lines);
   if (months.length === 0) return new Date().toISOString().slice(0, 7);
-  return months.reduce((a, b) => (a > b ? a : b));
+  return months[months.length - 1];
 }
 
 export function EstimateTable({
@@ -57,20 +64,34 @@ export function EstimateTable({
   const linesRef = useRef(lines);
   linesRef.current = lines;
 
+  // 관리되는 월 목록 — 유효한 YYYY-MM만 허용. 초기값은 기존 lines의 유효 월.
+  // 클라이언트 state로 관리: Store 변경 없이 탭 오염을 차단한다.
+  const [managedMonths, setManagedMonths] = useState<string[]>(() =>
+    validMonthsFromLines(initialLines),
+  );
+
+  // "+ 월 추가" 입력 UI 표시 여부
+  const [addingMonth, setAddingMonth] = useState(false);
+
   // 월/정산구분 탭 필터 (UI 레벨). 추후 Supabase 전환 시 서버 쿼리로 옮기기 쉽게 state로 분리.
   const [selectedMonth, setSelectedMonth] = useState<string>(() =>
-    latestMonth(initialLines),
+    latestValidMonth(initialLines),
   );
   const [selectedSettlement, setSelectedSettlement] =
     useState<SettlementType>("제작");
 
-  // 월 탭 목록 = 현재 행들의 distinct accountingMonth ∪ 선택 월 (정렬).
+  // managedMonths가 비어 있으면 selectedMonth를 fallback으로 포함.
   const monthTabs = useMemo(() => {
-    const set = new Set<string>();
-    for (const l of lines) if (l.accountingMonth) set.add(l.accountingMonth);
-    set.add(selectedMonth);
-    return [...set].sort();
-  }, [lines, selectedMonth]);
+    if (managedMonths.length === 0) return [selectedMonth];
+    if (!managedMonths.includes(selectedMonth)) return [...managedMonths, selectedMonth].sort();
+    return managedMonths;
+  }, [managedMonths, selectedMonth]);
+
+  // 유효하지 않은 accountingMonth를 가진 행 수 — 경고 배너용.
+  const invalidMonthCount = useMemo(
+    () => lines.filter((l) => !isValidMonth(l.accountingMonth)).length,
+    [lines],
+  );
 
   // 선택 월 + 정산구분에 해당하는 행만 표시.
   const visibleLines = useMemo(
@@ -122,6 +143,16 @@ export function EstimateTable({
     if (cur) persistLine(cur);
   }
 
+  function addMonth(value: string) {
+    if (!isValidMonth(value)) return;
+    setAddingMonth(false);
+    if (!managedMonths.includes(value)) {
+      const next = [...managedMonths, value].sort();
+      setManagedMonths(next);
+    }
+    setSelectedMonth(value);
+  }
+
   async function addRow() {
     setBusy(true);
     const res = await fetch("/api/lines", {
@@ -166,8 +197,8 @@ export function EstimateTable({
 
   return (
     <div className="space-y-3">
-      {/* 회계기간 월 탭 — 엑셀 흐름에 맞춰 선택 월 행만 표시. 라벨은 YYYY.MM. */}
-      <div className="flex flex-wrap gap-1 border-b border-slate-200">
+      {/* 회계기간 월 탭 — managedMonths 기반. 유효하지 않은 값은 탭에 노출하지 않음. */}
+      <div className="flex flex-wrap items-center gap-1 border-b border-slate-200 pb-px">
         {monthTabs.map((m) => (
           <button
             key={m}
@@ -181,7 +212,30 @@ export function EstimateTable({
             {formatAccountingMonth(m)}
           </button>
         ))}
+        {addingMonth ? (
+          <input
+            type="month"
+            autoFocus
+            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            onBlur={() => setAddingMonth(false)}
+            onChange={(e) => { if (e.target.value) addMonth(e.target.value); }}
+          />
+        ) : (
+          <button
+            onClick={() => setAddingMonth(true)}
+            className="rounded px-2 py-1 text-sm text-slate-400 hover:text-slate-700"
+          >
+            + 월 추가
+          </button>
+        )}
       </div>
+
+      {/* 잘못된 회계기간 값 경고 — 탭에는 노출되지 않지만 행은 존재함. */}
+      {invalidMonthCount > 0 && (
+        <p className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          잘못된 회계기간 값이 있는 행 {invalidMonthCount}건 — 해당 행의 회계기간을 올바른 월로 수정하세요.
+        </p>
+      )}
 
       {/* 제작/매체 탭 — 선택 정산구분 행만 표시. 기본 제작. */}
       <div className="flex gap-1">
@@ -259,7 +313,23 @@ export function EstimateTable({
               const jobWarn = jobCodeWarning(l.jobCode, l.campaignCode);
               return (
                 <tr key={l.id} className="border-t border-slate-100 align-top [&>td]:px-1.5 [&>td]:py-1">
-                  <td className="w-20"><input value={l.accountingMonth} placeholder="2026-06" onChange={(e) => patchLocal(l.id, { accountingMonth: e.target.value })} onBlur={() => persistById(l.id)} /></td>
+                  <td className="w-20">
+                    <select
+                      value={isValidMonth(l.accountingMonth) ? l.accountingMonth : ""}
+                      onChange={(e) => {
+                        if (!e.target.value) return;
+                        const next = patchLocal(l.id, { accountingMonth: e.target.value });
+                        if (next) persistLine(next);
+                      }}
+                    >
+                      {!isValidMonth(l.accountingMonth) && (
+                        <option value="" disabled>⚠ 잘못된 값</option>
+                      )}
+                      {monthTabs.map((m) => (
+                        <option key={m} value={m}>{formatAccountingMonth(m)}</option>
+                      ))}
+                    </select>
+                  </td>
                   <td className="w-16">
                     <select
                       value={l.settlementType}
