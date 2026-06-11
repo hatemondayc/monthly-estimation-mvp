@@ -27,12 +27,17 @@ export function formatDeltaPercent(value: number): string {
   return `${sign}${value.toFixed(1)}%`;
 }
 
+/** 저장 포맷 `YYYY-MM` 유효성 검사. 탭 오염 방지에 사용. */
+export function isValidMonth(value: string): boolean {
+  return /^\d{4}-\d{2}$/.test(value);
+}
+
 /**
  * 회계기간 표시용 포맷. 저장값 `YYYY-MM`을 엑셀 표기 `YYYY.MM`로 보여준다.
  * 저장 포맷은 그대로 유지하고 표시에만 사용한다. 형식이 다르면 원본을 반환.
  */
 export function formatAccountingMonth(value: string): string {
-  if (/^\d{4}-\d{2}$/.test(value)) return value.replace("-", ".");
+  if (isValidMonth(value)) return value.replace("-", ".");
   return value;
 }
 
