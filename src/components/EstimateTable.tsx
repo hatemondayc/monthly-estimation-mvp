@@ -8,7 +8,6 @@ import { useRef, useState } from "react";
 
 import { CalculationTypeSelect } from "@/components/CalculationTypeSelect";
 import { calculateLine } from "@/lib/calculations";
-import { emptyLine } from "@/lib/data";
 import { formatPercent, parseNumberInput } from "@/lib/format";
 import { campaignCodeWarning, jobCodeWarning } from "@/lib/validation";
 import { ESTIMATE_STATUSES, SETTLEMENT_TYPES } from "@/types/estimate";
@@ -95,7 +94,7 @@ export function EstimateTable({
     const res = await fetch("/api/lines", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(emptyLine(versionId)),
+      body: JSON.stringify(emptyPayload(versionId)),
     });
     setBusy(false);
     if (res.ok) {
@@ -275,5 +274,34 @@ export function EstimateTable({
       </p>
     </div>
   );
+}
+
+// 신규 행 POST 기본값. 클라이언트 컴포넌트는 서버 데이터 계층(data/repository)에
+// 의존하면 안 되므로(node:crypto 등 번들 오염) 여기서 로컬로 정의한다. (CLAUDE.md §12)
+function emptyPayload(versionId: string) {
+  return {
+    versionId,
+    settlementType: "제작",
+    advertiserName: "",
+    brandName: "",
+    campaignCode: "",
+    campaignName: "",
+    jobTypeName: "",
+    jobCode: "",
+    jobName: "",
+    accountingMonth: "",
+    gmv: 0,
+    revenue: 0,
+    isRevenueManual: false,
+    cost: 0,
+    profit: 0,
+    expectedMarginRate: 0,
+    actualMarginRate: 0,
+    calculationType: "profit_rate",
+    estimateStatus: "예상",
+    basisNote: "",
+    remark: "",
+    ownerName: "",
+  };
 }
 
